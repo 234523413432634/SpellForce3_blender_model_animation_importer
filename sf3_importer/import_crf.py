@@ -720,28 +720,10 @@ def load(operator, context, filepath,
         diffuse_name = getattr(mesh.materials, 'diffuse_texture', "")
         normal_name  = getattr(mesh.materials, 'normal_texture', "")
         specular_name = getattr(mesh.materials, 'specular_texture', "")
+        special_name = getattr(mesh.materials, 'special_texture', "")
 
-        # Resolve _s and _x texture names from the specular slot
-        s_name = None
-        x_name = None
-        if specular_name:
-            lower = specular_name.lower()
-            if lower.endswith('_s'):
-                s_name = specular_name
-                x_candidate = specular_name[:-2] + '_x'
-                if find_texture(filepath, x_candidate):
-                    x_name = x_candidate
-            elif lower.endswith('_x'):
-                x_name = specular_name
-                s_candidate = specular_name[:-2] + '_s'
-                if find_texture(filepath, s_candidate):
-                    s_name = s_candidate
-            else:
-                s_name = specular_name
-                
-        if not x_name and s_name:
-            x_name = s_name
-            s_name = None
+        s_name = specular_name
+        x_name = special_name
             
         # Load textures
         diff_node = None

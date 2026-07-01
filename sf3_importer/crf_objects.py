@@ -539,6 +539,7 @@ class CRF_materials(object):
         self.diffuse_texture = ""
         self.normal_texture = ""
         self.specular_texture = ""
+        self.special_texture = ""
         self.specular_constant = (0.0, 0.0, 0.0) # (R, G, B)
         self.specular_constant_alpha = 0.0 
         self.overlay_texture = ""
@@ -586,7 +587,8 @@ class CRF_materials(object):
                     
                     if tag == b"sffd": self.diffuse_texture = tex_name
                     elif tag == b"smrn": self.normal_texture = tex_name
-                    elif tag == b"lcps": self.specular_texture = tex_name
+                    elif tag == b"lcps": self.special_texture = tex_name
+                    elif tag == b"ccps": self.specular_texture = tex_name
                     elif tag == b"1tsc": self.overlay_texture = tex_name
                     elif tag == b"2tsc": self.unknown_texture = tex_name
                 else:
@@ -668,7 +670,7 @@ class CRF_materials(object):
                     data += self.write_utf16_texture(self.overlay_texture)
                 elif current_state == "write_specular":
                     data += struct.pack("4s", b"lcps")
-                    data += self.write_utf16_texture(self.specular_texture)
+                    data += self.write_utf16_texture(self.special_texture)
                 elif current_state == "write_specular_constant":
                     if self.custom_data_count == 1:
                         data += struct.pack("<I", 0x1)
