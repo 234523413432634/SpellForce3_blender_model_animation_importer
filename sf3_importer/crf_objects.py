@@ -571,7 +571,7 @@ class CRF_materials(object):
         self.material_type, = struct.unpack("2s", file.read(2))
         self.material_subtype, = struct.unpack(">Q", file.read(8))
 
-        if self.material_type in (b"nm", b"tm", b"ts"):
+        if self.material_type in (b"nm", b"tm", b"ts", b"ti"):
             
             # 1. Dynamically read all texture strings based on their tags
             valid_tex_tags = [b"sffd", b"smrn", b"1tsc", b"lcps", b"ccps", b"2tsc", b"3tsc", b"4tsc"]
