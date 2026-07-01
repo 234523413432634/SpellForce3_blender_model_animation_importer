@@ -303,7 +303,7 @@ class CRF_meshfile(object):
                 try:
                     # If we just finished a mesh, scan forward to align the pointer for the next one
                     if i > 0:
-                        self.align_to_next_mesh(file)
+                        self.align_to_next_mesh(file, i)
 
                     mesh = CRF_mesh()
                     mesh.parse_bin(file, file.tell(), i, verbose)
@@ -314,10 +314,11 @@ class CRF_meshfile(object):
 
             print("===End of parsing meshfile===")
 
-    def align_to_next_mesh(self, file):
+    def align_to_next_mesh(self, file, mesh_index):
             start_pos = file.tell()
-            # Scan up to 50KB forward to bypass broken materials and unknown separators
-            for _ in range(50000):
+            
+            # Scan up to 200KB forward to bypass broken materials, LODs, and separators
+            for _ in range(200000):
                 pos = file.tell()
                 buf = file.read(8)
                 if len(buf) < 8:
@@ -326,27 +327,62 @@ class CRF_meshfile(object):
                 num_verts, num_faces = struct.unpack("<II", buf)
 
                 # Heuristic 1: Vert and Face counts must be positive and reasonable
-                if 0 <= num_verts < 500000 and 0 <= num_faces < 500000:
+                if 0 < num_verts < 500000 and 0 < num_faces < 500000:
+                    
+                    # Heuristic 2: Known index size based on vertex count
+                    is_32bit = num_verts > 65535
+                    face_bytes = num_faces * (12 if is_32bit else 6)
+                    
                     try:
-                        # Heuristic 2: The stream count must exist exactly after the face data
-                        file.seek(pos + 8 + (num_faces * 6))
+                        # Jump past the faces
+                        file.seek(pos + 8 + face_bytes)
                         stream_count_buf = file.read(1)
                         if stream_count_buf:
                             stream_count, = struct.unpack("<B", stream_count_buf)
                             if stream_count in (1, 2, 3, 4):
-                                # Heuristic 3: The layout stride must be a standard vertex byte size
-                                layout, stride = struct.unpack("<II", file.read(8))
-                                if stride in (12, 16, 20, 24, 28, 32, 36, 40, 48, 64):
-                                    file.seek(pos) # Revert to the exact start of the new mesh
-                                    print(f"Recovered alignment for next mesh at offset 0x{pos:X}")
-                                    return
+                                
+                                # Heuristic 3: Check stream declarations and skip interleaved vertex blocks
+                                decl_buf = file.read(8)
+                                if len(decl_buf) == 8:
+                                    layout, stride = struct.unpack("<II", decl_buf)
+                                    if stride in (4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 48, 64):
+                                        
+                                        # Skip Stream 0 vertices
+                                        file.seek(file.tell() + (num_verts * stride))
+                                        
+                                        valid_streams = True
+                                        for s in range(1, stream_count):
+                                            s_decl = file.read(8)
+                                            if len(s_decl) == 8:
+                                                s_layout, s_stride = struct.unpack("<II", s_decl)
+                                                if s_stride in (4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 48, 64):
+                                                    # Skip Stream 's' vertices
+                                                    file.seek(file.tell() + (num_verts * s_stride))
+                                                else:
+                                                    valid_streams = False
+                                                    break
+                                            else:
+                                                valid_streams = False
+                                                break
+                                        
+                                        # Heuristic 4: Validate Bounding Box floats
+                                        if valid_streams:
+                                            bbox_buf = file.read(24)
+                                            if len(bbox_buf) == 24:
+                                                lox, loy, loz, hix, hiy, hiz = struct.unpack("<ffffff", bbox_buf)
+                                                
+                                                # Reject crazy float garbage often found in false positives
+                                                if all(-50000.0 < val < 50000.0 for val in (lox, loy, loz, hix, hiy, hiz)):
+                                                    file.seek(pos) # Revert to exact start of the new mesh
+                                                    print(f"Recovered alignment for Mesh {mesh_index} at offset 0x{pos:X}")
+                                                    return
                     except Exception:
                         pass
 
                 # Move forward 1 byte and try the pattern again
                 file.seek(pos + 1)
                 
-            print("Warning: Could not find next mesh signature. Relying on current offset.")
+            print(f"Warning: Could not find next mesh signature for Mesh {mesh_index}. Relying on current offset.")
             file.seek(start_pos)
 
     def scale(self, scale_factor):
@@ -373,7 +409,6 @@ class CRF_meshfile(object):
         for mesh in self.meshes:
             string += mesh.__str__()
         return string
-
         
     def get_bin(self):
         data = b""
