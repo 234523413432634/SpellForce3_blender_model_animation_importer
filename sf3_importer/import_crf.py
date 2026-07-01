@@ -90,7 +90,7 @@ def find_texture(crf_filepath, tex_name):
     if os.path.exists(fallback):
         return fallback
         
-    return ""
+    return fallback
 
 def createMaterial(name):        
     material = bpy.data.materials.new(name)
