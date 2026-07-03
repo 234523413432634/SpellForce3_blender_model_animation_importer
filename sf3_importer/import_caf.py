@@ -268,8 +268,8 @@ def load(operator, context, filepath, loop_animation=True):
             scene = bpy.context.scene
             scene.render.fps = 24
             scene.frame_start = 0
-            scene.frame_end = max_frame
-            action.frame_range = (0, max_frame)
+            scene.frame_end = max_frame-1
+            action.frame_range = (0, max_frame-1)
             print()
             print(f"Timeline set to frames 0-{max_frame} ({anim_duration:.4f}s at {FPS} fps)")
 
