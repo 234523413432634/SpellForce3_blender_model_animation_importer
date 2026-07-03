@@ -149,14 +149,14 @@ def addNormalTexture(normals_filepath, mat):
 
         # --- Image Texture ---
         texImage = mat.node_tree.nodes.new('ShaderNodeTexImage')
-        texImage.location = (-1100, -600)
+        texImage.location = (-1250, -600)
         img = bpy.data.images.load(realpath)
         img.colorspace_settings.name = 'Non-Color'
         texImage.image = img
 
         # --- Separate Color (extract Green from RGB) ---
         sep = mat.node_tree.nodes.new('ShaderNodeSeparateColor')
-        sep.location = (-800, -600)
+        sep.location = (-950, -600)
         mat.node_tree.links.new(texImage.outputs['Color'], sep.inputs['Color'])
 
         # --- Math Group: Reconstruct Blue (Z) from X and Y ---
@@ -250,7 +250,7 @@ def addNormalTexture(normals_filepath, mat):
         group_node.node_tree = group
         group_node.name = group_name
         group_node.label = "Reconstruct Z"
-        group_node.location = (-650, -555)
+        group_node.location = (-780, -555)
 
         # Feed unpacked channels into the math group
         mat.node_tree.links.new(texImage.outputs['Alpha'], group_node.inputs['X'])
@@ -258,7 +258,7 @@ def addNormalTexture(normals_filepath, mat):
 
         # --- Combine Color ---
         combine = mat.node_tree.nodes.new('ShaderNodeCombineColor')
-        combine.location = (-500, -450)
+        combine.location = (-590, -500)
 
         # Alpha -> Red, Green -> Green, Math group -> Blue
         mat.node_tree.links.new(texImage.outputs['Alpha'], combine.inputs['Red'])
@@ -267,7 +267,7 @@ def addNormalTexture(normals_filepath, mat):
 
         # --- Normal Map ---
         norm_node = mat.node_tree.nodes.new('ShaderNodeNormalMap')
-        norm_node.location = (-300, -450)
+        norm_node.location = (-440, -210)
         mat.node_tree.links.new(combine.outputs['Color'], norm_node.inputs['Color'])
         mat.node_tree.links.new(norm_node.outputs['Normal'], bsdf.inputs['Normal'])
 
@@ -276,41 +276,49 @@ def addNormalTexture(normals_filepath, mat):
         print(f"Failed to load Normal Texture {normals_filepath}: {e}")
         return None, None
 
-def addXTexture(x_filepath, mat, has_s_texture=False):
+def addXTexture(x_filepath, mat, has_s_texture=False, team_color_val=(0.025, 0.025, 0.09, 1.0), glossiness_scale=1.0):
     """
     Loads the _x mask texture (Non-Color) and builds:
       - Separate Color (R/G/B)
-      - Team Color RGB node (default blue)
+      - Team Color RGB node
+      - Glossiness scale multiply node
       - Mix node for team-color overlay driven by:
           - Red channel if has_s_texture is True
           - Alpha channel if has_s_texture is False
       - If has_s_texture is False:
           Red channel wired to BSDF Specular IOR Level
       - Blue channel wired to BSDF Roughness (inverted)
-    Returns (team_color_mix_node or None, separate_color_node).
+    Returns (team_color_mix_node, separate_color_node, invert_node).
     """
     if not x_filepath or not os.path.exists(x_filepath):
         print(f"X texture not found: {x_filepath}")
-        return None, None
+        return None, None, None
     try:
         realpath = os.path.expanduser(x_filepath)
         bsdf = mat.node_tree.nodes.get("Principled BSDF")
-        if not bsdf: return None, None
+        if not bsdf: return None, None, None
         
         texImage = mat.node_tree.nodes.new('ShaderNodeTexImage')
-        texImage.location = (-900, -250)
+        texImage.location = (-1200, -250)
         img = bpy.data.images.load(realpath)
         img.colorspace_settings.name = 'Non-Color'
         texImage.image = img
         
         sep = mat.node_tree.nodes.new('ShaderNodeSeparateColor')
-        sep.location = (-600, -250)
+        sep.location = (-900, -250)
         mat.node_tree.links.new(texImage.outputs['Color'], sep.inputs['Color'])
         
-        # Blue channel -> Inverted Roughness (always)
+        mult = mat.node_tree.nodes.new('ShaderNodeMath')
+        mult.operation = 'MULTIPLY'
+        mult.label = "Glossiness scale"
+        mult.location = (-630, -325)
+        mult.inputs[1].default_value = glossiness_scale
+        mat.node_tree.links.new(sep.outputs['Blue'], mult.inputs[0])
+        
+        # Blue channel -> Multiply -> Inverted Roughness
         invert = mat.node_tree.nodes.new('ShaderNodeInvert')
-        invert.location = (-380, -180)
-        mat.node_tree.links.new(sep.outputs['Blue'], invert.inputs['Color'])
+        invert.location = (-420, -80)
+        mat.node_tree.links.new(mult.outputs[0], invert.inputs['Color'])
         
         # Green channel -> Emission
         mat.node_tree.links.new(sep.outputs['Green'], bsdf.inputs['Emission Strength'])
@@ -320,7 +328,7 @@ def addXTexture(x_filepath, mat, has_s_texture=False):
         team_color = mat.node_tree.nodes.new('ShaderNodeRGB')
         team_color.label = "Team color"
         team_color.location = (-600, -50)
-        team_color.outputs['Color'].default_value = (0.025, 0.025, 0.09, 1.0)
+        team_color.outputs['Color'].default_value = team_color_val
         
         mix_team = mat.node_tree.nodes.new('ShaderNodeMix')
         mix_team.data_type = 'RGBA'
@@ -343,10 +351,10 @@ def addXTexture(x_filepath, mat, has_s_texture=False):
             if spec_input:
                 mat.node_tree.links.new(sep.outputs['Red'], spec_input)
             
-        return mix_team, sep
+        return mix_team, sep, invert
     except Exception as e:
         print(f"Failed to load X Texture {x_filepath}: {e}")
-        return None, None
+        return None, None, None
 
 
 def createSimpleMaterial(use_shadeless, viz_normals):        
@@ -607,6 +615,8 @@ def load(operator, context, filepath,
          use_diffuse_only=False,
          global_matrix=None,
          use_custom_normals=False,
+         team_color=(0.025, 0.025, 0.09, 1.0),
+         glossiness_scale=1.0
          ):
 
     print('\nimporting crf %r' % filepath)
@@ -748,9 +758,15 @@ def load(operator, context, filepath,
 
         x_mix_node = None
         x_sep_node = None
+        x_invert_node = None
         if not use_diffuse_only and x_name:
             x_fp = find_texture(filepath, x_name)
-            x_mix_node, x_sep_node = addXTexture(x_fp, mat, has_s_texture=(s_node is not None))
+            x_mix_node, x_sep_node, x_invert_node = addXTexture(
+                x_fp, mat, 
+                has_s_texture=(s_node is not None),
+                team_color_val=team_color,
+                glossiness_scale=glossiness_scale
+            )
 
         base_color_socket = None
         if diff_node:
@@ -788,7 +804,12 @@ def load(operator, context, filepath,
 
             glossy = mat.node_tree.nodes.new('ShaderNodeBsdfGlossy')
             glossy.location = (-180, 325)
-            glossy.inputs['Roughness'].default_value = 0.5
+            
+            if x_invert_node:
+                mat.node_tree.links.new(x_invert_node.outputs['Color'], glossy.inputs['Roughness'])
+            else:
+                glossy.inputs['Roughness'].default_value = 0.5
+                
             mat.node_tree.links.new(s_node.outputs['Color'], glossy.inputs['Color'])
 
             if norm_map_node:

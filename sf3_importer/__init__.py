@@ -41,6 +41,7 @@ from bpy.props import (BoolProperty,
                        FloatProperty,
                        StringProperty,
                        EnumProperty,
+                       FloatVectorProperty,
                        )
 from bpy_extras.io_utils import (ExportHelper,
                                  ImportHelper,
@@ -67,19 +68,36 @@ class ImportCRF(bpy.types.Operator, ImportHelper):
             name="Diffuse Texture Only",
             description="Skip importing normal, specular and _x mask textures.",
             default=False,
-            )      
+            )
+    team_color: FloatVectorProperty(
+            name="Team Color",
+            description="Default team color (if applicable)",
+            subtype='COLOR',
+            size=4,
+            default=(0.025, 0.025, 0.09, 1.0),
+            min=0.0, max=1.0
+            )
+    glossiness_scale: FloatProperty(
+            name="Glossiness Scale",
+            description="Higher values make metallic parts more reflective. Recommended values: 1.2 - 1.4",
+            default=1.0,
+            )
 
     def execute(self, context):
         from . import import_crf
 
         return import_crf.load(self, context, self.filepath,
                     use_custom_normals=self.use_custom_normals,
-                    use_diffuse_only=self.use_diffuse_only)
+                    use_diffuse_only=self.use_diffuse_only,
+                    team_color=self.team_color,
+                    glossiness_scale=self.glossiness_scale)
 
     def draw(self, context):
         layout = self.layout
         layout.prop(self, "use_custom_normals")
         layout.prop(self, "use_diffuse_only")
+        layout.prop(self, "team_color")
+        layout.prop(self, "glossiness_scale")
 
 
 class ImportCAF(bpy.types.Operator, ImportHelper):
