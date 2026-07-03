@@ -280,9 +280,10 @@ def addXTexture(x_filepath, mat, has_s_texture=False):
     """
     Loads the _x mask texture (Non-Color) and builds:
       - Separate Color (R/G/B)
-      - If has_s_texture is True:
-          Team Color RGB node (default blue)
-          Mix node for team-color overlay driven by the Red channel
+      - Team Color RGB node (default blue)
+      - Mix node for team-color overlay driven by:
+          - Red channel if has_s_texture is True
+          - Alpha channel if has_s_texture is False
       - If has_s_texture is False:
           Red channel wired to BSDF Specular IOR Level
       - Blue channel wired to BSDF Roughness (inverted)
@@ -316,22 +317,25 @@ def addXTexture(x_filepath, mat, has_s_texture=False):
         if 'Roughness' in bsdf.inputs:
             mat.node_tree.links.new(invert.outputs['Color'], bsdf.inputs['Roughness'])
         
-        mix_team = None
+        team_color = mat.node_tree.nodes.new('ShaderNodeRGB')
+        team_color.label = "Team color"
+        team_color.location = (-600, -50)
+        team_color.outputs['Color'].default_value = (0.025, 0.025, 0.09, 1.0)
+        
+        mix_team = mat.node_tree.nodes.new('ShaderNodeMix')
+        mix_team.data_type = 'RGBA'
+        mix_team.blend_type = 'MIX'
+        mix_team.location = (-400, 250)
+        mix_team.inputs['Factor'].default_value = 1.0
+        mat.node_tree.links.new(team_color.outputs['Color'], mix_team.inputs['A'])
         
         if has_s_texture:
             # Red channel -> Team color tinting
-            team_color = mat.node_tree.nodes.new('ShaderNodeRGB')
-            team_color.location = (-600, -50)
-            team_color.outputs['Color'].default_value = (0.025, 0.025, 0.09, 1.0)
-            
-            mix_team = mat.node_tree.nodes.new('ShaderNodeMix')
-            mix_team.data_type = 'RGBA'
-            mix_team.blend_type = 'MIX'
-            mix_team.location = (-400, 250)
-            mix_team.inputs['Factor'].default_value = 1.0
-            mat.node_tree.links.new(team_color.outputs['Color'], mix_team.inputs['A'])
             mat.node_tree.links.new(sep.outputs['Red'], mix_team.inputs['Factor'])
         else:
+            # Alpha channel -> Team color tinting (no _s texture present)
+            mat.node_tree.links.new(texImage.outputs['Alpha'], mix_team.inputs['Factor'])
+            
             # Red channel -> Specular IOR Level (no _s texture present)
             spec_input = bsdf.inputs.get('Specular IOR Level')
             if not spec_input:
