@@ -19,7 +19,7 @@
 bl_info = {
     "name": "Spellforce 3 CRF/CAF format",
     "author": "Stanislav Bobovych(original crf importer)",
-    "version": (1, 0),
+    "version": (1, 3),
     "blender": (4, 0, 0),
     "location": "File > Import",
     "description": "Import CRF, Import CRF mesh, UV's, "
@@ -37,11 +37,13 @@ if "bpy" in locals():
         imp.reload(caf_importer_script)
 
 import bpy
+import os
 from bpy.props import (BoolProperty,
                        FloatProperty,
                        StringProperty,
                        EnumProperty,
                        FloatVectorProperty,
+                       CollectionProperty,
                        )
 from bpy_extras.io_utils import (ExportHelper,
                                  ImportHelper,
@@ -51,7 +53,7 @@ from bpy_extras.io_utils import (ExportHelper,
 
 
 class ImportCRF(bpy.types.Operator, ImportHelper):
-    '''Load a SpellForce 3 CRF File'''
+    '''Load SpellForce 3 CRF Files'''
     bl_idname = "import_scene.crf"
     bl_label = "Import CRF"
     bl_options = {'REGISTER', 'PRESET', 'UNDO'}
@@ -59,6 +61,15 @@ class ImportCRF(bpy.types.Operator, ImportHelper):
     filter_glob: StringProperty(
         default="*.crf", options={"HIDDEN"}, maxlen=255
     )
+    
+    directory: StringProperty(
+        subtype='DIR_PATH',
+    )
+    files: CollectionProperty(
+        type=bpy.types.OperatorFileListElement,
+        options={'HIDDEN', 'SKIP_SAVE'},
+    )
+
     use_custom_normals: BoolProperty(
             name="Use Custom Normals",
             description="Import explicit vertex normals from the CRF file. Uncheck to auto-smooth.",
@@ -86,11 +97,24 @@ class ImportCRF(bpy.types.Operator, ImportHelper):
     def execute(self, context):
         from . import import_crf
 
-        return import_crf.load(self, context, self.filepath,
-                    use_custom_normals=self.use_custom_normals,
-                    use_diffuse_only=self.use_diffuse_only,
-                    team_color=self.team_color,
-                    glossiness_scale=self.glossiness_scale)
+        if not self.files:
+            return import_crf.load(self, context, self.filepath,
+                        use_custom_normals=self.use_custom_normals,
+                        use_diffuse_only=self.use_diffuse_only,
+                        team_color=self.team_color,
+                        glossiness_scale=self.glossiness_scale)
+
+        for file_elem in self.files:
+            current_filepath = os.path.join(self.directory, file_elem.name)
+            print(f"Batch Importing: {current_filepath}")
+            
+            import_crf.load(self, context, current_filepath,
+                        use_custom_normals=self.use_custom_normals,
+                        use_diffuse_only=self.use_diffuse_only,
+                        team_color=self.team_color,
+                        glossiness_scale=self.glossiness_scale)
+
+        return {'FINISHED'}
 
     def draw(self, context):
         layout = self.layout
