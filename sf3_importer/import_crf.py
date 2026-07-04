@@ -127,6 +127,7 @@ def addSpecularTexture(specular_filepath, mat):
         texImage = mat.node_tree.nodes.new('ShaderNodeTexImage')
         texImage.location = (-900, 100)
         texImage.image = bpy.data.images.load(realpath)
+        texImage.image.colorspace_settings.name = 'Non-Color'
         return texImage
     except Exception as e:
         print(f"Failed to load Specular Texture {specular_filepath}: {e}")
