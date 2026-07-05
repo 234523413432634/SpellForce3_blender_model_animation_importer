@@ -352,7 +352,7 @@ def addXTexture(x_filepath, mat, has_s_texture=False, team_color_val=(0.025, 0.0
             if spec_input:
                 mat.node_tree.links.new(sep.outputs['Red'], spec_input)
             
-        return mix_team, sep, invert
+        return mix_team, sep, invert, team_color
     except Exception as e:
         print(f"Failed to load X Texture {x_filepath}: {e}")
         return None, None, None
@@ -762,8 +762,8 @@ def load(operator, context, filepath,
         x_invert_node = None
         if not use_diffuse_only and x_name:
             x_fp = find_texture(filepath, x_name)
-            x_mix_node, x_sep_node, x_invert_node = addXTexture(
-                x_fp, mat, 
+            x_mix_node, x_sep_node, x_invert_node, team_color_node = addXTexture(
+                x_fp, mat,
                 has_s_texture=(s_node is not None),
                 team_color_val=team_color,
                 glossiness_scale=glossiness_scale
@@ -815,6 +815,24 @@ def load(operator, context, filepath,
 
             if norm_map_node:
                 mat.node_tree.links.new(norm_map_node.outputs['Normal'], glossy.inputs['Normal'])
+
+            mix_spec_team = mat.node_tree.nodes.new('ShaderNodeMix')
+            mix_spec_team.data_type = 'RGBA'
+            mix_spec_team.blend_type = 'MIX'
+            mix_spec_team.location = (-390, 520)
+
+            if team_color_node:
+                mat.node_tree.links.new(team_color_node.outputs['Color'], mix_spec_team.inputs['A'])
+
+            mat.node_tree.links.new(s_node.outputs['Color'], mix_spec_team.inputs['B'])
+
+            if s_node:
+                if x_sep_node:
+                    mat.node_tree.links.new(x_sep_node.outputs['Red'], mix_spec_team.inputs['Factor'])
+            else:
+                mix_spec_team.inputs['Factor'].default_value = 1.0
+
+            mat.node_tree.links.new(mix_spec_team.outputs['Result'], glossy.inputs['Color'])
 
             transparent = mat.node_tree.nodes.new('ShaderNodeBsdfTransparent')
             transparent.location = (-20, 230)
