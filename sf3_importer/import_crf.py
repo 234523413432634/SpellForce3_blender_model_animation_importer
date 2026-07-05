@@ -293,11 +293,11 @@ def addXTexture(x_filepath, mat, has_s_texture=False, team_color_val=(0.025, 0.0
     """
     if not x_filepath or not os.path.exists(x_filepath):
         print(f"X texture not found: {x_filepath}")
-        return None, None, None
+        return None, None, None, None
     try:
         realpath = os.path.expanduser(x_filepath)
         bsdf = mat.node_tree.nodes.get("Principled BSDF")
-        if not bsdf: return None, None, None
+        if not bsdf: return None, None, None, None
         
         texImage = mat.node_tree.nodes.new('ShaderNodeTexImage')
         texImage.location = (-1200, -250)
@@ -355,7 +355,7 @@ def addXTexture(x_filepath, mat, has_s_texture=False, team_color_val=(0.025, 0.0
         return mix_team, sep, invert, team_color
     except Exception as e:
         print(f"Failed to load X Texture {x_filepath}: {e}")
-        return None, None, None
+        return None, None, None, None
 
 
 def createSimpleMaterial(use_shadeless, viz_normals):        
