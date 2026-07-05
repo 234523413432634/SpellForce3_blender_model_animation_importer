@@ -749,7 +749,11 @@ def load(operator, context, filepath,
         s_node = None
         if local_use_specular and s_name:
             s_fp = find_texture(filepath, s_name)
-            s_node = addSpecularTexture(s_fp, mat)
+            if s_fp and s_fp.lower().endswith("_ao.dds"):
+                #print(f"Skipping specular glossy setup – texture is AO: {s_fp}")
+                s_node = None
+            else:
+                s_node = addSpecularTexture(s_fp, mat)
 
         norm_tex_node = None
         norm_map_node = None
