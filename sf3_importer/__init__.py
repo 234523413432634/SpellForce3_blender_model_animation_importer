@@ -19,7 +19,7 @@
 bl_info = {
     "name": "Spellforce 3 CRF/CAF format",
     "author": "Stanislav Bobovych(original crf importer)",
-    "version": (1, 4),
+    "version": (1, 5),
     "blender": (4, 0, 0),
     "location": "File > Import",
     "description": "Import CRF, Import CRF mesh, UV's, "

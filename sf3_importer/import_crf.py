@@ -31,11 +31,74 @@ from bpy_extras.image_utils import load_image
 
 from .crf_objects import CRF_object
 
+def rebuild_armature_sorted(orig_obj):
+    """
+    Funny hack to make the fbx exporter output armature bones in an ascending order
+    Creates a new armature with the exact same bone data as orig_obj,
+    but with bones sorted alphabetically. Custom properties on bones and
+    on the armature object are preserved.
+    Returns the new armature object.
+    """
+    
+    if bpy.context.object and bpy.context.object.mode != 'OBJECT':
+        bpy.ops.object.mode_set(mode='OBJECT')
+
+    # Read all bone data from the original armature
+    bpy.context.view_layer.objects.active = orig_obj
+    bpy.ops.object.mode_set(mode='EDIT')
+    bone_data = {}
+    for b in orig_obj.data.edit_bones:
+        data = {
+            'head': b.head.copy(),
+            'tail': b.tail.copy(),
+            'roll': b.roll,
+            'parent': b.parent.name if b.parent else None,
+            'use_connect': b.use_connect,
+            'custom_props': {key: b[key] for key in b.keys() if key not in ('head', 'tail', 'roll', 'parent', 'use_connect')}
+        }
+        bone_data[b.name] = data
+    bpy.ops.object.mode_set(mode='OBJECT')
+
+    # Create a new armature
+    new_arm = bpy.data.armatures.new(name=orig_obj.data.name + "_Sorted")
+    new_obj = bpy.data.objects.new(name=orig_obj.name + "_Sorted", object_data=new_arm)
+    bpy.context.collection.objects.link(new_obj)
+    new_obj.matrix_world = orig_obj.matrix_world.copy()
+
+    # Copy custom properties from the armature object itself
+    for key, value in orig_obj.items():
+        # Skip built‑in properties that shouldn't be copied directly
+        if key not in ('name', 'data', 'parent', 'matrix_world', 'location', 'rotation', 'scale', 'dimensions'):
+            new_obj[key] = value
+
+    # Enter edit mode on the new armature to build bones
+    bpy.context.view_layer.objects.active = new_obj
+    bpy.ops.object.mode_set(mode='EDIT')
+    new_edit_bones = new_arm.edit_bones
+
+    # Create bones in alphabetical order
+    sorted_names = sorted(bone_data.keys())
+    for name in sorted_names:
+        data = bone_data[name]
+        new_b = new_edit_bones.new(name)
+        new_b.head = data['head']
+        new_b.tail = data['tail']
+        new_b.roll = data['roll']
+        if data['parent']:
+            new_b.parent = new_edit_bones.get(data['parent'])
+            new_b.use_connect = data['use_connect']
+        # Restore custom properties
+        for key, val in data['custom_props'].items():
+            new_b[key] = val
+
+    bpy.ops.object.mode_set(mode='OBJECT')
+    return new_obj
+
 def find_files(base, pattern):
     '''Return list of files matching pattern in base folder.'''
     try:
         return [n for n in fnmatch.filter(os.listdir(base), pattern) if
-            os.path.isfile(os.path.join(base, n))]
+                os.path.isfile(os.path.join(base, n))]
     except:
         print("File not found")
 
@@ -653,7 +716,12 @@ def load(operator, context, filepath,
             orig_name = crf_bone.bone_name.decode('utf-8', errors='ignore').rstrip('\x00')
             if not orig_name:
                 orig_name = f"Bone_{bone_id:08X}"
-            final_name = truncate_bone_name(orig_name)
+            if bone_id < 1000:
+                prefix = f"{bone_id:03d}:"
+            else:
+                prefix = f"{bone_id}:"
+            full_name = prefix + orig_name
+            final_name = truncate_bone_name(full_name)
             bone_name_map[bone_id] = final_name
 
     for i in range(0, len(meshfile.meshes)):
@@ -940,10 +1008,22 @@ def load(operator, context, filepath,
             bpy.context.scene.collection.objects.link(amt_ob)
             amt_ob.matrix_world = global_matrix
             try:
-                build_armature(amt_ob, CRF.jointmap, bone_name_map)   # <-- added argument
+                build_armature(amt_ob, CRF.jointmap, bone_name_map)
             except Exception as e:
                 print(f"Failed to build skeleton tree: {e}")
             bpy.ops.object.mode_set(mode='OBJECT')
+
+            if amt_ob:
+                try:
+                    new_amt_ob = rebuild_armature_sorted(amt_ob)
+                    # Delete the old one
+                    bpy.data.objects.remove(amt_ob, do_unlink=True)
+                    # Rename the new one to "Armature" (to keep CAF importer happy)
+                    new_amt_ob.name = "Armature"
+                    new_amt_ob.data.name = "Armature"
+                    amt_ob = new_amt_ob
+                except Exception as e:
+                    print(f"Armature rebuild failed: {e} (using original)")
 
     for ob in new_objects:
         if ob.name not in bpy.context.collection.objects:
