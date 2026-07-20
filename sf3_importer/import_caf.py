@@ -3,7 +3,7 @@ import struct
 import os
 from mathutils import Vector, Quaternion
 
-FPS = 24.0
+FPS = 30
 
 PERMUTATIONS = {
     "YZ_SWAP":      (lambda x,y,z: Vector((x*0.1,z*0.1,y*0.1)),   lambda w,x,y,z: Quaternion((w,x,z,y))),
@@ -266,10 +266,10 @@ def load(operator, context, filepath, loop_animation=True):
             # Adjust timeline and action frame range
             max_frame = int(round(anim_duration * FPS))
             scene = bpy.context.scene
-            scene.render.fps = 24
+            scene.render.fps = FPS
             scene.frame_start = 0
             scene.frame_end = max_frame-1
-            action.frame_range = (0, max_frame-1)
+            action.frame_range = (0, max_frame)
             print()
             print(f"Timeline set to frames 0-{max_frame} ({anim_duration:.4f}s at {FPS} fps)")
 
