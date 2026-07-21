@@ -3,8 +3,6 @@ import struct
 import os
 from mathutils import Vector, Quaternion
 
-FPS = 30
-
 PERMUTATIONS = {
     "YZ_SWAP":      (lambda x,y,z: Vector((x*0.1,z*0.1,y*0.1)),   lambda w,x,y,z: Quaternion((w,x,z,y))),
 }
@@ -12,16 +10,26 @@ PERMUTATIONS = {
 BLENDER_VERSION = bpy.app.version
 USE_SLOTTED_ACTIONS = BLENDER_VERSION >= (5, 0, 0)
 
+
 class CAFHeader:
-    def __init__(self, num_keys, track_type, bone_id):
+    def __init__(self, num_keys, track_type, bone_id, cumulative_keys):
         self.num_keys = num_keys
         self.track_type = track_type
         self.bone_id = bone_id
+        self.cumulative_keys = cumulative_keys
+
 
 class CAFKeyframe:
     def __init__(self, data):
         self.x, self.y, self.z, self.w = data[0:4]
         self.tx, self.ty, self.tz, self.tw = data[4:8]
+
+
+class CAFEvent:
+    def __init__(self, name, time_sec):
+        self.name = name
+        self.time_sec = time_sec
+
 
 def get_bone_by_id(arm_obj, bone_id):
     """Finds a PoseBone by the custom 'bone_id' property set by the CRF importer."""
@@ -44,8 +52,7 @@ def _get_channelbag(action, slot):
     else:
         strip = layer.strips[0]
 
-    channelbag = strip.channelbag(slot, ensure=True)
-    return channelbag
+    return strip.channelbag(slot, ensure=True)
 
 
 def _get_fcurves_container(action, obj):
@@ -57,18 +64,12 @@ def _get_fcurves_container(action, obj):
     if not USE_SLOTTED_ACTIONS:
         return action
 
-    # Blender 5.0+ path
     anim_data = obj.animation_data
     if anim_data.action_slot is None:
-        # Auto-create or pick an OBJECT slot for this armature
         if len(action.slots) == 0:
             slot = action.slots.new(id_type='OBJECT', name=obj.name)
         else:
-            slot = None
-            for s in action.slots:
-                if s.target_id_type == 'OBJECT':
-                    slot = s
-                    break
+            slot = next((s for s in action.slots if s.target_id_type == 'OBJECT'), None)
             if slot is None:
                 slot = action.slots.new(id_type='OBJECT', name=obj.name)
         anim_data.action_slot = slot
@@ -79,11 +80,7 @@ def _get_fcurves_container(action, obj):
 
 
 def apply_hermite_to_fcurve(action, obj, bone_name, data_path, index, times_sec, values, tangents, fps):
-    """
-    Apply hermite interpolation to an fcurve.
-    < 5.0  -> action.fcurves
-    >= 5.0 -> channelbag.fcurves
-    """
+    """Apply cubic Hermite interpolation tangents directly to an fcurve."""
     fcurves_container = _get_fcurves_container(action, obj)
     full_data_path = f'pose.bones["{bone_name}"].{data_path}'
 
@@ -121,46 +118,82 @@ def apply_hermite_to_fcurve(action, obj, bone_name, data_path, index, times_sec,
     fc.update()
 
 
-def load(operator, context, filepath, loop_animation=True):
+def load(operator, context, filepath, force_loop=None, fps=30):
+    """
+    Imports a CAF animation file into Blender.
+    
+    :param force_loop: Optional boolean override. If None, uses native loop_flag from file.
+    :param fps: Frames per second to use for conversion.
+    """
     print(f"\n{'='*50}\nIMPORTING CAF: {os.path.basename(filepath)}\n{'='*50}")
     print(f"Detected Blender version: {BLENDER_VERSION[0]}.{BLENDER_VERSION[1]}.{BLENDER_VERSION[2]}")
     print(f"Using slotted actions API: {USE_SLOTTED_ACTIONS}")
+    print(f"FPS: {fps}")
 
-    headers, times_array, keyframes_array = [], [], []
+    headers = []
+    times_array = []
+    keyframes_array = []
+    events = []
+    anim_duration = 1.0
+    file_loop_flag = 0
 
     try:
         with open(filepath, 'rb') as f:
-            num_tracks, _ = struct.unpack("<II", f.read(8))
-            for i in range(num_tracks):
-                n_keys, t_type, b_id, _ = struct.unpack("<IIII", f.read(16))
-                headers.append(CAFHeader(n_keys, t_type, b_id))
+            data = f.read()
 
-            for hdr in headers:
-                times = [struct.unpack("<f", f.read(4))[0] for _ in range(hdr.num_keys)]
-                times_array.append(times)
+        offset = 0
+        num_tracks, _ = struct.unpack_from("<II", data, offset)
+        offset += 8
 
-            for hdr in headers:
-                kfs = [CAFKeyframe(struct.unpack("<8f", f.read(32))) for _ in range(hdr.num_keys)]
-                keyframes_array.append(kfs)
-            try:
-                duration_bytes = f.read(4)
-                if len(duration_bytes) < 4:
-                    raise ValueError("Missing duration footer")
-                anim_duration = struct.unpack("<f", duration_bytes)[0]
-                print(f"Animation duration read from file: {anim_duration:.6f} seconds")
-            except Exception as e:
-                max_time = max(max(track) for track in times_array) if times_array else 1.0
-                anim_duration = max_time
-                print(f"WARNING: Could not read duration footer ({e}). Using max key time: {anim_duration:.6f} s")
+        # 1. Track Descriptors
+        for i in range(num_tracks):
+            n_keys, t_type, b_id, cum_keys = struct.unpack_from("<IIII", data, offset)
+            headers.append(CAFHeader(n_keys, t_type, b_id, cum_keys))
+            offset += 16
 
-        # Debug print
-        for i, hdr in enumerate(headers):
-            t_type_str = "ROT" if hdr.track_type == 1 else "LOC"
-            print(f"\n--- Track {i} | Bone ID: 0x{hdr.bone_id:08X} | Type: {t_type_str} | Keys: {hdr.num_keys} ---")
-            for k in range(min(hdr.num_keys, 5)):  # print first 5 keys only
-                t = times_array[i][k]
-                kf = keyframes_array[i][k]
-                print(f"  Key {k:02d} | Time: {t:.3f} -> Raw[X:{kf.x:.4f}, Y:{kf.y:.4f}, Z:{kf.z:.4f}, W:{kf.w:.4f}]")
+        # 2. Keyframe Time Buffer
+        for hdr in headers:
+            times = [struct.unpack_from("<f", data, offset + k * 4)[0] for k in range(hdr.num_keys)]
+            times_array.append(times)
+            offset += hdr.num_keys * 4
+
+        # 3. Keyframe Data Buffer (32 bytes per keyframe)
+        for hdr in headers:
+            kfs = [CAFKeyframe(struct.unpack_from("<8f", data, offset + k * 32)) for k in range(hdr.num_keys)]
+            keyframes_array.append(kfs)
+            offset += hdr.num_keys * 32
+
+        # 4. Footer Parsing (Duration, Loop Flag, Animation Events)
+        if offset + 12 <= len(data):
+            anim_duration, file_loop_flag, num_events = struct.unpack_from("<fII", data, offset)
+            offset += 12
+
+            for _ in range(num_events):
+                if offset + 4 > len(data):
+                    break
+                name_len, = struct.unpack_from("<I", data, offset)
+                offset += 4
+
+                ev_name = data[offset:offset + name_len].decode('ascii', errors='ignore')
+                offset += name_len
+
+                ev_time, = struct.unpack_from("<f", data, offset)
+                offset += 4
+
+                events.append(CAFEvent(ev_name, ev_time))
+        else:
+            max_time = max(max(track) for track in times_array) if times_array else 1.0
+            anim_duration = max_time
+            print(f"WARNING: Footer incomplete. Fallback duration: {anim_duration:.6f}s")
+
+        # Determine looping state (Override or Native Flag)
+        is_looping = (file_loop_flag == 1) if force_loop is None else bool(force_loop)
+
+        print(f"Animation Duration: {anim_duration:.6f} seconds")
+        print(f"Looping: {is_looping} (Native Flag: {file_loop_flag})")
+        print(f"Animation Events Detected: {len(events)}")
+        for ev in events:
+            print(f"  - Event '{ev.name}' at {ev.time_sec:.3f}s")
 
         arm_obj = bpy.data.objects.get("Armature")
         if not arm_obj or arm_obj.type != 'ARMATURE':
@@ -185,15 +218,26 @@ def load(operator, context, filepath, loop_animation=True):
             elif hdr.track_type == 1:
                 bone_tracks[hdr.bone_id]['rot'] = (times_array[i], keyframes_array[i])
 
-        # Apply time scaling and create actions
+        # Process actions
         for perm_name, (swizzle_loc, swizzle_quat) in PERMUTATIONS.items():
             action_name = f"{base_anim_name}"
             action = bpy.data.actions.new(name=action_name)
             arm_obj.animation_data.action = action
 
-            # For Blender 5.0+, ensure a slot is assigned before any fcurve access
+            # Metadata custom properties on Action
+            action["duration_sec"] = anim_duration
+            action["is_looping"] = is_looping
+            action["events"] = [{"name": ev.name, "time": ev.time_sec} for ev in events]
+
+            # Blender 5.0+ slot setup
             if USE_SLOTTED_ACTIONS:
                 _ = _get_fcurves_container(action, arm_obj)
+
+            # Add Timeline Pose Markers for events
+            for ev in events:
+                ev_frame = int(round(ev.time_sec * fps))
+                pm = action.pose_markers.new(name=ev.name)
+                pm.frame = ev_frame
 
             for bone_id, tracks in bone_tracks.items():
                 pose_bone = get_bone_by_id(arm_obj, bone_id)
@@ -224,15 +268,14 @@ def load(operator, context, filepath, loop_animation=True):
                         t_y.append(blen_tan.y * scale_tan)
                         t_z.append(blen_tan.z * scale_tan)
 
-                    if loop_animation:
-                        # Close the loop
+                    if is_looping and scaled_times:
                         scaled_times.append(anim_duration)
                         v_x.append(v_x[0]); v_y.append(v_y[0]); v_z.append(v_z[0])
                         t_x.append(t_x[0]); t_y.append(t_y[0]); t_z.append(t_z[0])
 
-                    apply_hermite_to_fcurve(action, arm_obj, pose_bone.name, "location", 0, scaled_times, v_x, t_x, FPS)
-                    apply_hermite_to_fcurve(action, arm_obj, pose_bone.name, "location", 1, scaled_times, v_y, t_y, FPS)
-                    apply_hermite_to_fcurve(action, arm_obj, pose_bone.name, "location", 2, scaled_times, v_z, t_z, FPS)
+                    apply_hermite_to_fcurve(action, arm_obj, pose_bone.name, "location", 0, scaled_times, v_x, t_x, fps)
+                    apply_hermite_to_fcurve(action, arm_obj, pose_bone.name, "location", 1, scaled_times, v_y, t_y, fps)
+                    apply_hermite_to_fcurve(action, arm_obj, pose_bone.name, "location", 2, scaled_times, v_z, t_z, fps)
 
                 # ROTATION
                 if tracks['rot']:
@@ -251,32 +294,33 @@ def load(operator, context, filepath, loop_animation=True):
                         t_y.append(blen_tan.y * scale_tan)
                         t_z.append(blen_tan.z * scale_tan)
 
-                    if loop_animation:
+                    if is_looping and scaled_times:
                         scaled_times.append(anim_duration)
                         v_w.append(v_w[0]); v_x.append(v_x[0])
                         v_y.append(v_y[0]); v_z.append(v_z[0])
                         t_w.append(t_w[0]); t_x.append(t_x[0])
                         t_y.append(t_y[0]); t_z.append(t_z[0])
 
-                    apply_hermite_to_fcurve(action, arm_obj, pose_bone.name, "rotation_quaternion", 0, scaled_times, v_w, t_w, FPS)
-                    apply_hermite_to_fcurve(action, arm_obj, pose_bone.name, "rotation_quaternion", 1, scaled_times, v_x, t_x, FPS)
-                    apply_hermite_to_fcurve(action, arm_obj, pose_bone.name, "rotation_quaternion", 2, scaled_times, v_y, t_y, FPS)
-                    apply_hermite_to_fcurve(action, arm_obj, pose_bone.name, "rotation_quaternion", 3, scaled_times, v_z, t_z, FPS)
+                    apply_hermite_to_fcurve(action, arm_obj, pose_bone.name, "rotation_quaternion", 0, scaled_times, v_w, t_w, fps)
+                    apply_hermite_to_fcurve(action, arm_obj, pose_bone.name, "rotation_quaternion", 1, scaled_times, v_x, t_x, fps)
+                    apply_hermite_to_fcurve(action, arm_obj, pose_bone.name, "rotation_quaternion", 2, scaled_times, v_y, t_y, fps)
+                    apply_hermite_to_fcurve(action, arm_obj, pose_bone.name, "rotation_quaternion", 3, scaled_times, v_z, t_z, fps)
 
             # Adjust timeline and action frame range
-            max_frame = int(round(anim_duration * FPS))
+            max_frame = int(round(anim_duration * fps))
             scene = bpy.context.scene
-            scene.render.fps = FPS
+            scene.render.fps = fps
             scene.frame_start = 0
             scene.frame_end = max_frame-1
             action.frame_range = (0, max_frame)
-            print()
-            print(f"Timeline set to frames 0-{max_frame} ({anim_duration:.4f}s at {FPS} fps)")
+            print(f"Timeline configured to frames 0-{scene.frame_end} ({anim_duration:.4f}s at {fps} FPS)\n")
 
         bpy.ops.object.mode_set(mode='OBJECT')
         return {'FINISHED'}
         
     except Exception as e:
         print(f"ERROR importing CAF: {e}")
+        import traceback
+        traceback.print_exc()
         operator.report({'ERROR'}, f"Failed to import CAF: {e}")
         return {'CANCELLED'}

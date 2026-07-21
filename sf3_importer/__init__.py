@@ -19,22 +19,23 @@
 bl_info = {
     "name": "Spellforce 3 CRF/CAF format",
     "author": "Stanislav Bobovych(original crf importer)",
-    "version": (1, 5),
+    "version": (1, 6),
     "blender": (4, 0, 0),
-    "location": "File > Import",
-    "description": "Import CRF, Import CRF mesh, UV's, "
-                   "materials and textures. Import CAF animations.",
+    "location": "File > Import / Export",
+    "description": "Import/Export CRF meshes and CAF animations.",
     "warning": "",
     "wiki_url": "",
     "tracker_url": "",
-    "category": "Import"}
+    "category": "Import-Export"}
 
 if "bpy" in locals():
     import imp
     if "import_crf" in locals():
         imp.reload(import_crf)
-    if "caf_importer_script" in locals():
-        imp.reload(caf_importer_script)
+    if "import_caf" in locals():
+        imp.reload(import_caf)
+    if "export_caf" in locals():
+        imp.reload(export_caf)
 
 import bpy
 import os
@@ -44,6 +45,7 @@ from bpy.props import (BoolProperty,
                        EnumProperty,
                        FloatVectorProperty,
                        CollectionProperty,
+                       IntProperty,
                        )
 from bpy_extras.io_utils import (ExportHelper,
                                  ImportHelper,
@@ -133,60 +135,126 @@ class ImportCAF(bpy.types.Operator, ImportHelper):
     filter_glob: StringProperty(
         default="*.caf", options={"HIDDEN"}, maxlen=255
     )
-    loop_animation: BoolProperty(
-            name="Looping Animation",
-            description="Insert keyframes at the end to close the animation loop.",
-            default=True,
-            )
+
+    fps: IntProperty(
+        name="FPS",
+        description="Frames per second for the animation",
+        default=30,
+        min=1,
+    )
 
     def execute(self, context):
         from . import import_caf
-
-        return import_caf.load(self, context, self.filepath,
-                    loop_animation=self.loop_animation)
+        return import_caf.load(self, context, self.filepath, fps=self.fps)
 
     def draw(self, context):
         layout = self.layout
-        layout.prop(self, "loop_animation")
+        layout.prop(self, "fps")
 
 
-_menus_attached = False
+class ExportCAF(bpy.types.Operator, ExportHelper):
+    '''Export an Armature Action to SpellForce 3 CAF format'''
+    bl_idname = "export_scene.caf"
+    bl_label = "Export CAF"
+    bl_options = {'REGISTER', 'PRESET', 'UNDO'}
+    filename_ext = ".caf"
+    filter_glob: StringProperty(
+        default="*.caf", options={"HIDDEN"}, maxlen=255
+    )
 
-def _attach_menus_idempotent():
-    global _menus_attached
-    if _menus_attached:
-        return
-    # Remove old callbacks if they exist (safe if they don't)
-    try:
-        bpy.types.TOPBAR_MT_file_import.remove(menu_func_import)
-    except Exception:  # pylint: disable=broad-exception-caught
-        pass
-    # Append once
-    bpy.types.TOPBAR_MT_file_import.append(menu_func_import)
-    _menus_attached = True
+    fps: IntProperty(
+        name="FPS",
+        description="Frames per second for the animation",
+        default=30,
+        min=1,
+    )
 
-def _detach_menus_safely():
-    global _menus_attached
-    try:
-        bpy.types.TOPBAR_MT_file_import.remove(menu_func_import)
-    except Exception:  # pylint: disable=broad-exception-caught
-        pass
-    _menus_attached = False
+    def execute(self, context):
+        from . import export_caf
+
+        obj = context.active_object
+        if not obj or obj.type != 'ARMATURE':
+            self.report({'ERROR'}, "Active object must be an Armature")
+            return {'CANCELLED'}
+
+        if not obj.animation_data or not obj.animation_data.action:
+            self.report({'ERROR'}, "Armature must have an active Action assigned")
+            return {'CANCELLED'}
+
+        try:
+            export_caf.export_caf(self.filepath, arm_obj=obj, fps=self.fps)
+        except Exception as e:
+            self.report({'ERROR'}, f"Export failed: {e}")
+            import traceback
+            traceback.print_exc()
+            return {'CANCELLED'}
+
+        self.report({'INFO'}, f"CAF exported to {self.filepath}")
+        return {'FINISHED'}
+
+    def draw(self, context):
+        layout = self.layout
+        layout.prop(self, "fps")
+
+
+# ---------- Menu Registration ----------
+_import_menus_attached = False
+_export_menus_attached = False
 
 def menu_func_import(self, context):
     self.layout.operator(ImportCRF.bl_idname, text="SpellForce 3 model (.crf)")
     self.layout.operator(ImportCAF.bl_idname, text="SpellForce 3 animation (.caf)")
 
+def menu_func_export(self, context):
+    self.layout.operator(ExportCAF.bl_idname, text="SpellForce 3 animation (.caf)")
+
+def _attach_menus():
+    global _import_menus_attached, _export_menus_attached
+
+    # Import menu
+    if not _import_menus_attached:
+        try:
+            bpy.types.TOPBAR_MT_file_import.remove(menu_func_import)
+        except Exception:
+            pass
+        bpy.types.TOPBAR_MT_file_import.append(menu_func_import)
+        _import_menus_attached = True
+
+    # Export menu
+    if not _export_menus_attached:
+        try:
+            bpy.types.TOPBAR_MT_file_export.remove(menu_func_export)
+        except Exception:
+            pass
+        bpy.types.TOPBAR_MT_file_export.append(menu_func_export)
+        _export_menus_attached = True
+
+def _detach_menus():
+    global _import_menus_attached, _export_menus_attached
+    try:
+        bpy.types.TOPBAR_MT_file_import.remove(menu_func_import)
+    except Exception:
+        pass
+    _import_menus_attached = False
+
+    try:
+        bpy.types.TOPBAR_MT_file_export.remove(menu_func_export)
+    except Exception:
+        pass
+    _export_menus_attached = False
+
+
 def register():
     bpy.utils.register_class(ImportCRF)
     bpy.utils.register_class(ImportCAF)
-    _attach_menus_idempotent()
-    
+    bpy.utils.register_class(ExportCAF)
+    _attach_menus()
 
 def unregister():
     bpy.utils.unregister_class(ImportCRF)
     bpy.utils.unregister_class(ImportCAF)
-    _detach_menus_safely()
+    bpy.utils.unregister_class(ExportCAF)
+    _detach_menus()
 
 if __name__ == "__main__":
     register()
